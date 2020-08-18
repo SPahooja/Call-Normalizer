@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	phonedb "normalizer/db"
 	"regexp"
@@ -20,60 +19,36 @@ const (
 func main() {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=disable", host, port, user, password)
 
-	must(phonedb.Reset("psotgres", psqlInfo, dbname))
+	must(phonedb.Reset("postgres", psqlInfo, dbname))
 
 	psqlInfo = fmt.Sprintf("%s dbname=%s", psqlInfo, dbname)
-	db, err = sql.Open("postgres", psqlInfo)
+	must(phonedb.Migrate("postgres", psqlInfo))
+
+	db, err := phonedb.Open("postgres", psqlInfo)
+	must(err)
+	defer db.Close()
 
 	must(err)
 	defer db.Close()
 
-	err = createTable(db)
-	if err != nil {
-		panic(err)
-	}
-	_, err = insertphone(db, "1234567890")
-	_, err = insertphone(db, "123 456 7891")
-	id, err := insertphone(db, "(123) 456 7892")
-	_, err = insertphone(db, "(123) 456-7893")
-	_, err = insertphone(db, "123-456-7894")
-	_, err = insertphone(db, "123-456-7890")
-	_, err = insertphone(db, "1234567892")
-	_, err = insertphone(db, "(123)456-7892")
-	_, err = insertphone(db, "123456789")
-	if err != nil {
-		panic(err)
-	}
-	number, err := getphone(db, id)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Number is", number)
+	err = db.Seed()
+	must(err)
 
-	phones, err := allphones(db)
-	if err != nil {
-		panic(err)
-	}
+	phones, err := db.AllPhones()
+	must(err)
+
 	for _, p := range phones {
 		fmt.Printf("Working on %+v\n", p)
-		number := normalize(p.number)
-		if number != p.number {
-			existing, err := findphone(db, number)
-			if err != nil {
-				panic(err)
-			}
+		number := normalize(p.Number)
+		if number != p.Number {
+			existing, err := db.Findphone(number)
+			must(err)
 			if existing != nil {
-				err = deletephone(db, p.id)
-				if err != nil {
-					panic(err)
-				}
+				must(db.Deletephone(p.ID))
 				//delete
 			} else {
-				p.number = number
-				err = updatephone(db, p)
-				if err != nil {
-					panic(err)
-				}
+				p.Number = number
+				must(db.Updatephone(&p))
 				//update
 			}
 		} else {
@@ -82,104 +57,12 @@ func main() {
 	}
 }
 
-type phone struct {
-	id     int
-	number string
-}
-
 func must(err error) {
 	if err != nil {
 		panic(err)
 	}
 }
-func deletephone(db *sql.DB, id int) error {
-	statement := `DELETE FROM phone_numbers WHERE id=$1`
-	_, err := db.Exec(statement, id)
-	return err
-}
 
-func updatephone(db *sql.DB, p phone) error {
-	statement := `UPDATE phone_numbers SET value=$2 WHERE id=$1`
-	_, err := db.Exec(statement, p.id, p.number)
-	return err
-}
-
-func allphones(db *sql.DB) ([]phone, error) {
-	rows, err := db.Query("SELECT id, value FROM phone_numbers")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var ret []phone
-	for rows.Next() {
-		var p phone
-		if err := rows.Scan(&p.id, &p.number); err != nil {
-			return nil, err
-		}
-		ret = append(ret, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return ret, nil
-}
-
-func getphone(db *sql.DB, id int) (string, error) {
-	var number string
-	err := db.QueryRow("SELECT value FROM phone_numbers where id=$1", id).Scan(&number)
-	if err != nil {
-		return "", err
-	}
-	return number, nil
-}
-func findphone(db *sql.DB, number string) (*phone, error) {
-	var p phone
-	err := db.QueryRow("SELECT * FROM phone_numbers where value=$1", number).Scan(&p.id, &p.number)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		} else {
-			return nil, err
-		}
-	}
-	return &p, nil
-}
-
-func insertphone(db *sql.DB, phone string) (int, error) {
-	statement := `INSERT INTO phone_numbers(value) VALUES($1) RETURNING id`
-	var id int
-	err := db.QueryRow(statement, phone).Scan(&id)
-	if err != nil {
-		return -1, err
-	}
-	return id, nil
-}
-
-func createTable(db *sql.DB) error {
-	statement := `
-	CREATE TABLE IF NOT EXISTS phone_numbers(
-		id SERIAL,
-		value VARCHAR(255)
-	)`
-	_, err := db.Exec(statement)
-	return err
-}
-
-func resetDB(db *sql.DB, name string) error {
-	_, err := db.Exec("DROP DATABASE IF EXISTS " + name)
-	if err != nil {
-		panic(err)
-	}
-	return createDB(db, name)
-}
-func createDB(db *sql.DB, name string) error {
-	_, err := db.Exec("CREATE DATABASE " + name)
-	if err != nil {
-		return err
-	}
-	return nil
-}
 
 func normalize(phone string) string {
 	re := regexp.MustCompile("\\D")
