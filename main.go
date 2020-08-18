@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	phonedb "normalizer/db"
 	"regexp"
 
 	_ "github.com/lib/pq"
@@ -18,21 +19,13 @@ const (
 
 func main() {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=disable", host, port, user, password)
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		panic(err)
-	}
-	err = resetDB(db, dbname)
-	if err != nil {
-		panic(err)
-	}
-	db.Close()
+
+	must(phonedb.Reset("psotgres", psqlInfo, dbname))
+
 	psqlInfo = fmt.Sprintf("%s dbname=%s", psqlInfo, dbname)
 	db, err = sql.Open("postgres", psqlInfo)
 
-	if err != nil {
-		panic(err)
-	}
+	must(err)
 	defer db.Close()
 
 	err = createTable(db)
@@ -62,13 +55,53 @@ func main() {
 		panic(err)
 	}
 	for _, p := range phones {
-		fmt.Printf("%+v\n", p)
+		fmt.Printf("Working on %+v\n", p)
+		number := normalize(p.number)
+		if number != p.number {
+			existing, err := findphone(db, number)
+			if err != nil {
+				panic(err)
+			}
+			if existing != nil {
+				err = deletephone(db, p.id)
+				if err != nil {
+					panic(err)
+				}
+				//delete
+			} else {
+				p.number = number
+				err = updatephone(db, p)
+				if err != nil {
+					panic(err)
+				}
+				//update
+			}
+		} else {
+			fmt.Println("no change")
+		}
 	}
 }
 
 type phone struct {
 	id     int
 	number string
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+func deletephone(db *sql.DB, id int) error {
+	statement := `DELETE FROM phone_numbers WHERE id=$1`
+	_, err := db.Exec(statement, id)
+	return err
+}
+
+func updatephone(db *sql.DB, p phone) error {
+	statement := `UPDATE phone_numbers SET value=$2 WHERE id=$1`
+	_, err := db.Exec(statement, p.id, p.number)
+	return err
 }
 
 func allphones(db *sql.DB) ([]phone, error) {
@@ -99,6 +132,18 @@ func getphone(db *sql.DB, id int) (string, error) {
 		return "", err
 	}
 	return number, nil
+}
+func findphone(db *sql.DB, number string) (*phone, error) {
+	var p phone
+	err := db.QueryRow("SELECT * FROM phone_numbers where value=$1", number).Scan(&p.id, &p.number)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		} else {
+			return nil, err
+		}
+	}
+	return &p, nil
 }
 
 func insertphone(db *sql.DB, phone string) (int, error) {
