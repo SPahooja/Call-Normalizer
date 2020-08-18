@@ -63,7 +63,6 @@ func must(err error) {
 	}
 }
 
-
 func normalize(phone string) string {
 	re := regexp.MustCompile("\\D")
 	return re.ReplaceAllString(phone, "")
